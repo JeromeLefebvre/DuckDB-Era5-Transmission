@@ -1,0 +1,10 @@
+# MacOS
+.DS_Store
+
+# Outputs
+Maps/
+
+# Input data
+Transmission_Overhead_Powerlines_WP_032_WA_GDA2020_Public_Secure_Shapefile/
+Era5Parquet/
+
