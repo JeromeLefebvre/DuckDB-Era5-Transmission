@@ -1,34 +1,48 @@
 load spatial;
 
--- Make the transmission data available
+-- Query #1 Make the transmission data available
 create or replace view td as
 from st_read('Transmission_Overhead_Powerlines_WP_032_WA_GDA2020_Public_Secure_Shapefile/Transmission_Overhead_Powerlines_WP_032.shp');
 
--- Used to get the direction of each segements of the line
-CREATE or replace MACRO degreesVect(a, b) AS ((DEGREES(atan2(ST_Y(b) - ST_Y(a), ST_X(b) - ST_X(a))) + 360) % 360);
+-- Look at what is inside td
+from td;
 
--- Take all transmissions lines and split them into individual components
+-- Returns the direction of a straight line in degrees
+create macro degreesVect(a, b) AS 
+(degrees(atan2(ST_Y(b) - ST_Y(a), ST_X(b) - ST_X(a))) + 360) % 360;
+
+-- Query #2 Take all transmissions lines and split them into individual components
 create or replace view lines as
 with allTransmissions as
 (
-       -- This unnest multiline so everything is linestrings
-       (select line_name, kv, instln_yr, unnest(ST_DUMP(geom)).geom as geom from (from td where ST_GeometryType(geom) = 'MULTILINESTRING'))
-       union
-       (select line_name, kv, instln_yr, geom as geom from (from td where ST_GeometryType(geom) = 'LINESTRING'))
+from td
+select
+       case
+              when ST_GeometryType(geom) = 'MULTILINESTRING' then unnest(ST_DUMP(geom)).geom
+              else geom end as geom,
+       * exclude (geom)
 )
-select st_pointN(geom, cast(range as integer)) as a, st_pointN(geom, cast(range as integer) + 1) as b, degreesVect(a,b) as dir, line_name, kv, range as idx from allTransmissions, range(1,800,1) where b is not null;
+from allTransmissions, range(1,800)
+select
+       st_pointN(geom, range::int) as "segment start",
+       st_pointN(geom, range::int + 1) as "segment end",
+       degreesVect("segment start","segment end") as "direction",
+       degreesVect1("segment start","segment end") as "direction1",
+       line_name as "line name",
+       range as "index",
+       kv "capacity", 
+where "segment end" is not null;
 
--- overlay the points on top of the grid to visualize the data
-copy (select * exclude(b) from lines) to 'Maps/points.geojson' with (format gdal, driver 'geojson');
 
--- Pick one lon MOR-TS 81
-select concat('https://www.google.com/maps/@', st_y(a), ',', st_x(b), ',1004m/data=!3m1!1e3!5m1!1e4?entry=ttu') from lines where line_name = 'MOR-TS 81' and idx=99;
+-- Sanity check
+select concat('https://www.google.com/maps/@', st_y("segment start"), ',', st_x("segment start"), ',1004m/data=!3m1!1e3!5m1!1e4?entry=ttu') from lines where "line name" = 'MOR-TS 81' and index=99;
 
-select concat('https://www.google.com/maps/@', st_y(a), ',', st_x(b), ',1004m/data=!3m1!1e3!5m1!1e4?entry=ttu') from lines where line_name = 'CTB-ENB 81' and idx=10;
 
 -- Create a set of tiles that cover all of western australia (except Christmas island)
 -- This is a Voronoi map on the weather data
+
 CREATE or replace view tiles AS
+FROM range(-36*4, -13*4) AS latRange, range(110*4, 130*4) AS lonRange
 SELECT latRange.range/4 as lat, 
        lonRange.range/4 as lon,
        ST_ConvexHull(st_collect([
@@ -37,8 +51,7 @@ SELECT latRange.range/4 as lat,
        st_point(lon+0.125,lat-0.125),
        st_point(lon+0.125,lat+0.125),
        st_point(lon-0.125,lat-0.125),
-       ])) as tile
-FROM range(-36*4, -13*4) AS latRange, range(110*4, 130*4) AS lonRange;
+       ])) as tile;
 
 -- Visualize 
 copy tiles
