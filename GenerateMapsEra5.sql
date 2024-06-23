@@ -1,24 +1,16 @@
 load spatial;
 
--- Query #1 Make the transmission data available
-create or replace view td as
-from st_read('Transmission_Overhead_Powerlines_WP_032_WA_GDA2020_Public_Secure_Shapefile/Transmission_Overhead_Powerlines_WP_032.shp');
-
--- Look at what is inside td
-from td;
-
 -- Returns the direction of a straight line in degrees
 create macro degreesVect(a, b) AS 
 (degrees(atan2(ST_Y(b) - ST_Y(a), ST_X(b) - ST_X(a))) + 360) % 360;
 
--- Query #2 Take all transmissions lines and split them into individual components
+-- Query #1 Take all transmissions lines and split them into individual components
 create or replace view lines as
 with allTransmissions as
 (
-from td
+from st_read('Transmission_Overhead_Powerlines_WP_032_WA_GDA2020_Public_Secure_Shapefile/Transmission_Overhead_Powerlines_WP_032.shp')
 select
-       case
-              when ST_GeometryType(geom) = 'MULTILINESTRING' then unnest(ST_DUMP(geom)).geom
+       case when ST_GeometryType(geom) = 'MULTILINESTRING' then unnest(ST_DUMP(geom)).geom
               else geom end as geom,
        * exclude (geom)
 )
@@ -26,48 +18,52 @@ from allTransmissions, range(1,800)
 select
        st_pointN(geom, range::int) as "segment start",
        st_pointN(geom, range::int + 1) as "segment end",
-       degreesVect("segment start","segment end") as "direction",
-       degreesVect1("segment start","segment end") as "direction1",
+       round(st_x("segment start")*4)/4 as "weather latitude",
+       round(st_y("segment start")*4)/4 as "weather latitude", -- index to the weather data
+       degreesVect("segment start", "segment end") as "direction",
        line_name as "line name",
        range as "index",
        kv "capacity", 
 where "segment end" is not null;
 
-
 -- Sanity check
 select concat('https://www.google.com/maps/@', st_y("segment start"), ',', st_x("segment start"), ',1004m/data=!3m1!1e3!5m1!1e4?entry=ttu') from lines where "line name" = 'MOR-TS 81' and index=99;
 
+-- The weather
+describe from 'Era5Parquet/era5_australia_200*.parquet';
 
--- Create a set of tiles that cover all of western australia (except Christmas island)
--- This is a Voronoi map on the weather data
+-- Query #2 weather KPi
+create or replace view weather as
+from 'Era5Parquet/era5_australia_200*.parquet';
+select date_part('year', time) as year,
+       date_part('Month', time) as month,
+       date_part('hour', time)::int as h,
+       lat,
+       lon,
+       avg(t2m) - 273.15 as "avg temperature", -- switch from Ke
+       avg(u10) as "avg u10",
+       avg(v10) as "avg v10", 
+       avg(ssr) as "avg solar irradiance"
+       (180 + 180/pi()*atan2("avg u10", "avg v10"))%360 as "avg wind direction",
+       SQRT(POWER("avg u10", 2) + POWER("avg v10", 2)) as "avg wind speed",
+       avg(100 * (exp((17.27 * d2m) / (237.3 + d2m)) / exp((17.27 * t2m) / (237.3 + t2m)))) as "avg humidity";
+group by all;
 
-CREATE or replace view tiles AS
-FROM range(-36*4, -13*4) AS latRange, range(110*4, 130*4) AS lonRange
-SELECT latRange.range/4 as lat, 
-       lonRange.range/4 as lon,
-       ST_ConvexHull(st_collect([
-       st_point(lon-0.125,lat-0.125),
-       st_point(lon-0.125,lat+0.125),
-       st_point(lon+0.125,lat-0.125),
-       st_point(lon+0.125,lat+0.125),
-       st_point(lon-0.125,lat-0.125),
-       ])) as tile;
+-- Query #3 power
+from lines, weather
 
--- Visualize 
-copy tiles
-to 'maps/1. All tiles.geojson' with (format gdal, driver 'geojson');
 
--- Select only the tiles that cover the grid
-create or replace view minimalTiles as
-select DISTINCT tile as tile, tiles.lat as lat, tiles.lon as lon from tiles,td where ST_Intersects(tiles.tile, td.geom);
 
--- visualize the minimal cover (in the client, also load the TD data)
-copy minimalTiles to 'maps/2. Minimal cover.geojson' with (format GDAL, driver 'Geojson');
 
 -- one day
 copy (
 from 'Era5Parquet/era5_australia_20*.parquet' where (longitude, latitude) in (select (lon, lat) from minimalTiles)
 ) to 'Era5Parquet/era5_minimalTitles.parquet';
+
+from lines, from 'Era5Parquet/era5_australia_20*.parquet'
+
+
+where longitude, latitude)
 
 -- add weather to mininimal tiles
 create view coverWithWeather as
