@@ -1,13 +1,14 @@
 load spatial;
 
--- Returns the direction of a straight line given by points a to b in degrees
-create macro degreesVect(a, b) AS 
-(degrees(atan2(ST_Y(b) - ST_Y(a), ST_X(b) - ST_X(a))) + 360) % 360;
+-- Returns the direction of a line using the start and end point in degrees
+create macro directionOfLine(line) AS 
+(degrees(atan2(ST_Y(st_EndPoint(line)) - ST_Y(st_StartPoint(line)), ST_X(st_EndPoint(line)) - ST_X(st_StartPoint(line)))) + 360) % 360;
 
 -- Query #1 Take all transmissions lines and split them into individual components
 create or replace view lines as
 with allTransmissions as
 (
+       -- Turn everything into linestrings
        from st_read('Transmission_Overhead_Powerlines_WP_032_WA_GDA2020_Public_Secure_Shapefile/Transmission_Overhead_Powerlines_WP_032.shp')
        select
               case when ST_GeometryType(geom) = 'MULTILINESTRING' then unnest(ST_DUMP(geom)).geom
@@ -16,18 +17,21 @@ with allTransmissions as
 )
 from allTransmissions, range(1,800)
 select
-       st_pointN(geom, range::int) as "segment start",
-       st_pointN(geom, range::int + 1) as "segment end",
-       round(st_x("segment start")*4)/4 as "weather longitude",
-       round(st_y("segment start")*4)/4 as "weather latitude", -- index to the weather data
-       degreesVect("segment start", "segment end") as "direction",
+       -- The geometry are the individual line segments
+       st_makeline(st_pointN(geom, range::int), st_pointN(geom, range::int + 1)) as segment,
+       -- Features
+       directionOfLine(segment) as "direction",
        line_name as "line name",
        range as "index",
        kv "capacity", 
-where "segment end" is not null;
+       -- Foreign key to the parquet file
+       round(st_x(ST_StartPoint(segment))*4)/4 as "weather longitude",
+       round(st_y(ST_StartPoint(segment))*4)/4 as "weather latitude",       
+where segment is not null;
+
 
 -- Sanity check
-select concat('https://www.google.com/maps/@', st_y("segment start"), ',', st_x("segment start"), ',1004m/data=!3m1!1e3!5m1!1e4?entry=ttu') from lines where "line name" = 'MOR-TS 81' and index=99;
+select concat('https://www.google.com/maps/@', st_y(st_StartPoint(segment)), ',', st_x(st_StartPoint(segment)), ',1004m/data=!3m1!1e3!5m1!1e4?entry=ttu') from lines where "line name" = 'MOR-TS 81' and index=99;
 
 -- The weather
 describe from 'Era5Parquet/era5_australia_200*.parquet';
