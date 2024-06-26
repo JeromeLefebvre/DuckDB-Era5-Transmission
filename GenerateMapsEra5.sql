@@ -1,6 +1,6 @@
 load spatial;
 
--- Returns the direction of a straight line in degrees
+-- Returns the direction of a straight line given by points a to b in degrees
 create macro degreesVect(a, b) AS 
 (degrees(atan2(ST_Y(b) - ST_Y(a), ST_X(b) - ST_X(a))) + 360) % 360;
 
@@ -8,17 +8,17 @@ create macro degreesVect(a, b) AS
 create or replace view lines as
 with allTransmissions as
 (
-from st_read('Transmission_Overhead_Powerlines_WP_032_WA_GDA2020_Public_Secure_Shapefile/Transmission_Overhead_Powerlines_WP_032.shp')
-select
-       case when ST_GeometryType(geom) = 'MULTILINESTRING' then unnest(ST_DUMP(geom)).geom
-              else geom end as geom,
-       * exclude (geom)
+       from st_read('Transmission_Overhead_Powerlines_WP_032_WA_GDA2020_Public_Secure_Shapefile/Transmission_Overhead_Powerlines_WP_032.shp')
+       select
+              case when ST_GeometryType(geom) = 'MULTILINESTRING' then unnest(ST_DUMP(geom)).geom
+                     else geom end as geom,
+              * exclude (geom)
 )
 from allTransmissions, range(1,800)
 select
        st_pointN(geom, range::int) as "segment start",
        st_pointN(geom, range::int + 1) as "segment end",
-       round(st_x("segment start")*4)/4 as "weather latitude",
+       round(st_x("segment start")*4)/4 as "weather longitude",
        round(st_y("segment start")*4)/4 as "weather latitude", -- index to the weather data
        degreesVect("segment start", "segment end") as "direction",
        line_name as "line name",
@@ -34,31 +34,35 @@ describe from 'Era5Parquet/era5_australia_200*.parquet';
 
 -- Query #2 weather KPi
 create or replace view weather as
-from 'Era5Parquet/era5_australia_200*.parquet';
+from 'Era5Parquet/era5_australia_200*.parquet'
 select date_part('year', time) as year,
        date_part('Month', time) as month,
        date_part('hour', time)::int as h,
-       lat,
-       lon,
+       latitude,
+       longitude,
        avg(t2m) - 273.15 as "avg temperature", -- switch from Ke
        avg(u10) as "avg u10",
        avg(v10) as "avg v10", 
-       avg(ssr) as "avg solar irradiance"
+       avg(ssr) as "avg solar irradiance",
        (180 + 180/pi()*atan2("avg u10", "avg v10"))%360 as "avg wind direction",
        SQRT(POWER("avg u10", 2) + POWER("avg v10", 2)) as "avg wind speed",
-       avg(100 * (exp((17.27 * d2m) / (237.3 + d2m)) / exp((17.27 * t2m) / (237.3 + t2m)))) as "avg humidity";
+       avg(100 * (exp((17.27 * d2m) / (237.3 + d2m)) / exp((17.27 * t2m) / (237.3 + t2m)))) as "avg humidity"
 group by all;
 
 -- Query #3 power
+create or replace view linesWithWeather as
+select round(least(abs(("avg wind direction" % 180) - ("avg wind direction" % 180)), 180 - abs(("avg wind direction" % 180) - ("avg wind direction" % 180))), 1) AS lineOfAttack,
+       st_makeline("Segment Start","Segment End") as segment,
+       * exclude("avg wind direction", "segment start", "segment end", "direction", "avg u10", "avg v10", latitude, longitude, "weather longitude", "weather latitude")
 from lines, weather
+where weather.latitude = lines."weather latitude" and weather.longitude = lines."weather longitude";
 
-
-
+describe linesWithWeather;
 
 -- one day
 copy (
-from 'Era5Parquet/era5_australia_20*.parquet' where (longitude, latitude) in (select (lon, lat) from minimalTiles)
-) to 'Era5Parquet/era5_minimalTitles.parquet';
+       select ST_AsWKB()
+) to 'Maps/linesWithWeather.parquet';
 
 from lines, from 'Era5Parquet/era5_australia_20*.parquet'
 
