@@ -1,0 +1,6 @@
+# Ignore the content of the folder but not itself
+*
+!.gitignore
+
+# Mac OS
+.DS_Store
