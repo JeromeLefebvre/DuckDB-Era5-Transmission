@@ -34,13 +34,9 @@ select concat('https://www.google.com/maps/@', st_y(st_StartPoint(segment)), ','
 
 copy lines to 'maps/1. Line segements.geojson' with (format GDAL, driver 'geojson');
 
-
--- The weather
-describe from 'Era5Parquet/era5_australia_200*.parquet';
-
 -- Query #2 Get the weather and the KPI
 create or replace view weather as
-from 'Era5/era5_australia_200*.parquet'
+from 'Era5/era5_australia_2000.parquet'
 select -- Geometry, key    
        latitude,
        longitude,
@@ -56,6 +52,8 @@ select -- Geometry, key
        sqrt(power("avg u10", 2) + power("avg v10", 2)) as "avg wind speed",
        avg(100 * (exp((17.27 * d2m) / (237.3 + d2m)) / exp((17.27 * t2m) / (237.3 + t2m)))) as "avg humidity"
 group by all;
+
+copy (select st_point(longitude, latitude), * from Weather where month = 1 and hour = 1) to 'maps/2. Weather.geojson' with (format GDAL, driver 'geojson');
 
 -- Query #3 power
 create or replace view linesWithWeather as
