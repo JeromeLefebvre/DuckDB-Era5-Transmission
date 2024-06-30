@@ -51,8 +51,4 @@ select
     concat('https://www.google.com/maps/@', latitude, ',', longitude, ',8000m/data=!3m1!1e3!5m1!1e4?entry=ttu') as map,
     time at time zone 'UTC' at time zone 'Australia/Perth' as "local time",;
 
-
-
-
 .quit
-
