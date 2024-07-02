@@ -1,8 +1,8 @@
 load spatial;
 
 -- Returns the direction of a line using the start and end point in degrees
-create macro directionOfLine(line) AS 
-(degrees(atan2(ST_Y(st_EndPoint(line)) - ST_Y(st_StartPoint(line)), ST_X(st_EndPoint(line)) - ST_X(st_StartPoint(line)))) + 360) % 360;
+create or replace macro directionOfLine(line) AS 
+(degrees(atan2(ST_Y(st_EndPoint(line)) - ST_Y(st_StartPoint(line)), ST_X(st_EndPoint(line)) - ST_X(st_StartPoint(line)))) + 270) % 360;
 
 -- Query #1 Take all transmissions lines and split them into individual components
 create or replace view lines as
@@ -29,6 +29,9 @@ select
        round(st_y(ST_StartPoint(segment))*4)/4 as "weather latitude",       
 where segment is not null;
 
+from lines where "line name" = 'MOR-TS 81' and index = 186;
+
+
 -- Sanity check -- palette cleanser
 select concat('https://www.google.com/maps/@', st_y(st_StartPoint(segment)), ',', st_x(st_StartPoint(segment)), ',1004m/data=!3m1!1e3!5m1!1e4?entry=ttu') from lines where "line name" = 'MOR-TS 81' and index=99;
 
@@ -44,35 +47,37 @@ select -- Geometry, key
        date_part('Month', time) as month,
        date_part('hour', time)::int as hour,
        -- Features
-       avg(t2m) - 273.15 as "temperature", -- switch from Kelvin
-       avg(u10) as "u10",
-       avg(v10) as "v10", 
-       avg(ssr) as "solar irradiance",
-       (180 + 180/pi()*atan2("u10", "v10"))%360 as "wind direction",
-       sqrt(power("u10", 2) + power("v10", 2)) as "wind speed",
+       avg(t2m) - 273.15 as "avg temperature", -- switch from Kelvin
+       avg(u10) as "avg u10",
+       avg(v10) as "avg v10", 
+       avg(ssr) as "avg solar irradiance",
+       (180 + 180/pi()*atan2("avg u10", "avg v10"))%360 as "avg wind direction",
+       sqrt(power("avg u10", 2) + power("avg v10", 2)) as "avg wind speed",
        --avg(100 * (exp((17.27 * d2m) / (237.3 + d2m)) / exp((17.27 * t2m) / (237.3 + t2m)))) as "humidity"
 group by all;
 
+from weather where month = 1 and hour = 1 and longitude = 116.50 and latitude = -31.50;
 
 -- Visualise the data
--- quick, somebody ask a question!
-copy (select st_point(longitude, latitude), temperature from Weather where month = 1 and hour = 1 and longitude >= 129) to 'maps/2. Weather.geojson' with (format GDAL, driver 'geojson');
-
+copy (
+       select st_point(longitude, latitude), "avg temperature" from Weather where month = 2 and hour = 1
+)
+to 'maps/2. Weather.geojson' with (format GDAL, driver 'geojson');
 
 -- Query #3 power
 create or replace view linesWithWeather as
 from lines, weather
 select
-       round(least(abs(("wind direction" % 180) - (direction % 180)), 180 - abs(("wind direction" % 180) - (direction % 180))), 1) AS "line of attack",
-       * exclude("wind direction","direction", "u10", "v10", latitude, longitude, "weather longitude", "weather latitude")
+       round(least(abs(("avg wind direction" % 180) - (direction % 180)), 180 - abs(("avg wind direction" % 180) - (direction % 180))), 1) AS "line of attack",
+       * exclude("avg wind direction","direction", "avg u10", "avg v10", latitude, longitude, "weather longitude", "weather latitude")
 where weather.latitude = lines."weather latitude" and weather.longitude = lines."weather longitude";
 
-DESCRIBE linesWithWeather;
+from linesWithWeather  where "line name" = 'NOR-SVY 81' and month = 1 and index = 77 order by hour;
 
 -- one day
 copy (
        select ST_AsWKB(segment) as geometry, concat('2000-01-01 ', hour, ':00:00' )::Datetime, * exclude(segment, hour) from linesWithWeather where month = 1
-) to 'Maps/linesWithWeather.parquet' (format 'parquet', COMPRESSION 'zstd', ROW_GROUP_SIZE 160);
+) to 'Maps/3. Transmissions with Weather.parquet' (format 'parquet', COMPRESSION 'zstd', ROW_GROUP_SIZE 160);
 
 /*
 Update the database:
