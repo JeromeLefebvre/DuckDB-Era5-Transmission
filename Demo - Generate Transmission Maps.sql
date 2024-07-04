@@ -26,10 +26,8 @@ select
        kv "capacity", 
        -- Foreign key to the Era5 files
        round(st_x(ST_StartPoint(segment))*4)/4 as "weather longitude",
-       round(st_y(ST_StartPoint(segment))*4)/4 as "weather latitude",       
+       round(st_y(ST_StartPoint(segment))*4)/4 as "weather latitude",
 where segment is not null;
-
-from lines where "line name" = 'MOR-TS 81' and index = 186;
 
 
 -- Sanity check -- palette cleanser
@@ -43,7 +41,7 @@ from 'Era5/era5_australia_2000.parquet'
 select -- Geometry, key    
        latitude,
        longitude,
-       -- Time
+       -- Time, key
        date_part('Month', time) as month,
        date_part('hour', time)::int as hour,
        -- Features
@@ -56,11 +54,9 @@ select -- Geometry, key
        --avg(100 * (exp((17.27 * d2m) / (237.3 + d2m)) / exp((17.27 * t2m) / (237.3 + t2m)))) as "humidity"
 group by all;
 
-from weather where month = 1 and hour = 1 and longitude = 116.50 and latitude = -31.50;
-
 -- Visualise the data
 copy (
-       select st_point(longitude, latitude), "avg temperature" from Weather where month = 2 and hour = 1
+       select st_point(longitude, latitude), "avg temperature" from Weather where month = 2 and hour = 6
 )
 to 'maps/2. Weather.geojson' with (format GDAL, driver 'geojson');
 
@@ -72,9 +68,7 @@ select
        * exclude("avg wind direction","direction", "avg u10", "avg v10", latitude, longitude, "weather longitude", "weather latitude")
 where weather.latitude = lines."weather latitude" and weather.longitude = lines."weather longitude";
 
-from linesWithWeather  where "line name" = 'NOR-SVY 81' and month = 1 and index = 77 order by hour;
-
--- one day
+-- one month
 copy (
        select ST_AsWKB(segment) as geometry, concat('2000-01-01 ', hour, ':00:00' )::Datetime, * exclude(segment, hour) from linesWithWeather where month = 1
 ) to 'Maps/3. Transmissions with Weather.parquet' (format 'parquet', COMPRESSION 'zstd', ROW_GROUP_SIZE 160);
